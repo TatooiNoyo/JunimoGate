@@ -1,3 +1,3 @@
 [submodule "smapi"]
 	path = smapi
-	url = https://github.com/leontismaro/JunimoGate-SMAPI.git
+	url = git@github.com:TatooiNoyo/JunimoGate-SMAPI.git
