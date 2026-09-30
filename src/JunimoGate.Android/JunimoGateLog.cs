@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Android.App;
 using Android.Content;
 using Android.Runtime;
 using AndroidBuild = global::Android.OS.Build;
@@ -83,6 +84,28 @@ public static class JunimoGateLog
         Write("error", tag, message, exception);
     }
 
+    /// <summary>Records a bounded game-host checkpoint in both the product log and Android's next process-exit record.</summary>
+    public static void Checkpoint(Context context, string checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint);
+        checkpoint = Truncate(checkpoint, 120);
+        Info("JunimoGate.Checkpoint", checkpoint);
+        if (!OperatingSystem.IsAndroidVersionAtLeast(30))
+            return;
+
+        try
+        {
+            var manager = context.GetSystemService(Context.ActivityService) as ActivityManager;
+            manager?.SetProcessStateSummary(ToBoundedUtf8(checkpoint, 128));
+        }
+        catch (Exception exception) when (exception is Java.Lang.RuntimeException or InvalidOperationException)
+        {
+            // Checkpoints are diagnostic-only and Android may throttle state-summary updates.
+            AndroidLog.Warn("JunimoGate.Checkpoint", $"state-summary-unavailable:{exception.GetType().Name}");
+        }
+    }
+
     private static void Write(string level, string tag, string message, Exception? exception)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tag);
@@ -155,6 +178,17 @@ public static class JunimoGateLog
 
     private static string Truncate(string value, int maximumCharacters) =>
         value.Length <= maximumCharacters ? value : value[..maximumCharacters] + " [truncated]";
+
+    private static byte[] ToBoundedUtf8(string value, int maximumBytes)
+    {
+        var bytes = Utf8WithoutBom.GetBytes(value);
+        if (bytes.Length <= maximumBytes)
+            return bytes;
+        var length = maximumBytes;
+        while (length > 0 && (bytes[length] & 0xc0) == 0x80)
+            length--;
+        return bytes[..length];
+    }
 
     private static void DisposeWriter()
     {

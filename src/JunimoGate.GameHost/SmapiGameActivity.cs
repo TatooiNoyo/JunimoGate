@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.OS;
 using Android.Util;
@@ -61,6 +62,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
         ConfigureGameWindow();
         base.OnCreate(savedInstanceState);
         Log.Initialize(this, "game", GameHostRuntimeIdentity.BuildId);
+        Checkpoint("stage=activity-created");
         if (OperatingSystem.IsAndroidVersionAtLeast(33))
             RegisterBackInvokedCallback();
         SetContentView(Resource.Layout.activity_smapi_game);
@@ -83,14 +85,17 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             var key = attemptId ?? throw new InvalidDataException("The launch capability is missing.");
             GameSessionRegistry.MarkActive(this);
             var launch = await GameLaunchRegistry.ConsumeAsync(this, key, CancellationToken.None);
+            Checkpoint("stage=launch-consumed");
             var snapshot = launch.Snapshot;
             stage = GameStartupStage.SmapiBundle;
             var smapiBundle = await BundledSmapiAssets.ProvisionAndValidateAsync(
                 this,
                 CancellationToken.None);
+            Checkpoint("stage=smapi-bundle-ready");
             await TryBeginPlaySessionAsync(launch, snapshot, smapiBundle);
             stage = GameStartupStage.RuntimeInventory;
             var runtimeFiles = PreparedRuntimeFiles.BuildAndValidate(snapshot, smapiBundle);
+            Checkpoint("stage=runtime-inventory-ready");
             stage = GameStartupStage.LoaderInstallation;
             var runtimeRoot = JunimoGate.Android.AndroidPrivateStorage.GetRuntimeRoot(ApplicationContext ?? this);
             loader = new SmapiDefaultAssemblyLoader(
@@ -100,8 +105,10 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             loader.Install();
             SmapiContentBridge.Install(runtimeFiles);
             GameHostBridge.Attach(this, snapshot);
+            Checkpoint("stage=loader-installed");
             stage = GameStartupStage.GameAssembly;
             _ = loader.LoadGameAssembly();
+            Checkpoint("stage=game-assembly-loaded");
             Log.Info(
                 "JunimoGate.SMAPI",
                 $"session-starting:build={GameHostRuntimeIdentity.BuildId}:bundle={smapiBundle.BundleId}:smapi=4.5.2");
@@ -110,6 +117,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             var startupCompletion = new TaskCompletionSource<SmapiFailure?>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             CreateAndRunSession(snapshot, launch, smapiBundle, loader, startupCompletion);
+            Checkpoint("stage=smapi-session-created");
             var reportedFailure = await startupCompletion.Task;
             if (reportedFailure is not null)
             {
@@ -119,6 +127,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             }
             await TryMarkPlaySessionRunningAsync();
             stage = GameStartupStage.Running;
+            Checkpoint("stage=running");
             try
             {
                 await GameLaunchRegistry.RecordOutcomeAsync(
@@ -204,6 +213,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             AttachGameView = view => RunOnUiThread(() => AttachGameView(view)),
             ReportModLoadingReady = () =>
             {
+                Checkpoint("stage=mod-loading-ready");
                 Log.Info("JunimoGate.SMAPI", "mod-loading-ready");
                 startupCompletion.TrySetResult(null);
             },
@@ -262,6 +272,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             },
             LoadingFadeDurationMilliseconds);
         Log.Info("JunimoGate.SMAPI", "game-view-ready");
+        Checkpoint("stage=game-view-ready");
     }
 
     protected override void OnResume()
@@ -282,10 +293,26 @@ public sealed class SmapiGameActivity : AndroidGameActivity
         Log.Info(
             "JunimoGate.SMAPI",
             $"activity-paused sessionCreated={(session is null ? 0 : 1)} finishing={(finishing ? 1 : 0)}");
+        Checkpoint($"stage=activity-paused finishing={(finishing ? 1 : 0)}");
         session?.OnPause();
         QueuePlaySessionBackgroundPersistence();
         base.OnPause();
     }
+
+    public override void OnTrimMemory(TrimMemory level)
+    {
+        Log.Warn("JunimoGate.Memory", $"trim-memory level={(int)level} name={level}");
+        Checkpoint($"stage=trim-memory level={(int)level}");
+        base.OnTrimMemory(level);
+    }
+
+    public override void OnLowMemory()
+    {
+        Log.Warn("JunimoGate.Memory", "low-memory");
+        Checkpoint("stage=low-memory");
+        base.OnLowMemory();
+    }
+
     protected override void OnNewIntent(global::Android.Content.Intent? intent) { base.OnNewIntent(intent); Log.Info("JunimoGate.SMAPI", "session-routed-to-front"); }
     public override void OnWindowFocusChanged(bool hasFocus) { base.OnWindowFocusChanged(hasFocus); session?.OnWindowFocusChanged(hasFocus); if (hasFocus) SetImmersive(); }
 #pragma warning disable CS0672
@@ -298,6 +325,7 @@ public sealed class SmapiGameActivity : AndroidGameActivity
         Log.Info(
             "JunimoGate.SMAPI",
             $"activity-destroyed finishing={(IsFinishing ? 1 : 0)} changingConfiguration={(IsChangingConfigurations ? 1 : 0)} terminateProcess={(terminateGameProcess ? 1 : 0)}");
+        Checkpoint($"stage=activity-destroyed terminate={(terminateGameProcess ? 1 : 0)}");
         destroyed = true;
         if (OperatingSystem.IsAndroidVersionAtLeast(33))
             UnregisterBackInvokedCallback();
@@ -335,6 +363,8 @@ public sealed class SmapiGameActivity : AndroidGameActivity
             Finish();
         });
     }
+
+    private void Checkpoint(string value) => Log.Checkpoint(this, value);
 
     private void ReleaseRuntimeHooks()
     {

@@ -56,7 +56,7 @@ Recovery and cache cleanup do not delete the Mod library, groups, settings, logs
 
 Home leaves the `:game` process available for foreground routing. Opening the launcher while that process is active brings the existing `SmapiGameActivity` forward. Back is converted into one game `Escape` input after SMAPI is ready; before readiness it backgrounds the task.
 
-Launcher and game processes write separate bounded JSONL product logs. The UI can display and share selected current log files through an app `FileProvider`. Complete one-shot descriptor tokens are never logged.
+Launcher and game processes write separate bounded JSONL product logs. On Android 11 and later, the launcher also captures a bounded history of system-reported process exits, including the last game-host checkpoint, exit reason/status, sampled PSS/RSS, and any system-provided text ANR trace. Native crashes retain their system reason and signal status; binary tombstones are not copied into the redacted text bundle. Game-host startup stages and memory-pressure callbacks update the checkpoint without including user or workspace data. Diagnostic export refreshes these records before creating the archive. The UI can display and share selected current log files through an app `FileProvider`. Complete one-shot descriptor tokens are never logged.
 
 ## Storage
 

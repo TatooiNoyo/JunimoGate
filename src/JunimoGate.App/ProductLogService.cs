@@ -147,6 +147,7 @@ internal sealed class ProductLogService
         Stream destination,
         CancellationToken cancellationToken)
     {
+        await AndroidProcessExitDiagnostics.CaptureAsync(context, cancellationToken).ConfigureAwait(false);
         var runtime = GameHostRuntimeInformationReader.Read(context);
         var prepared = await GameLaunchRegistry.TryOpenActiveAsync(context, cancellationToken).ConfigureAwait(false);
         var profilesRoot = Path.Combine(AndroidPrivateStorage.GetUserDataRoot(context), "profiles");
@@ -179,6 +180,9 @@ internal sealed class ProductLogService
             ["junimoGateVersion"] = package?.VersionName,
             ["junimoGateVersionCode"] = package is null ? null : GetLongVersionCode(package).ToString(),
             ["androidSdk"] = ((int)global::Android.OS.Build.VERSION.SdkInt).ToString(),
+            ["lowMemoryKillReportSupported"] = OperatingSystem.IsAndroidVersionAtLeast(30)
+                ? global::Android.App.ActivityManager.IsLowMemoryKillReportSupported.ToString()
+                : null,
             ["deviceManufacturer"] = global::Android.OS.Build.Manufacturer,
             ["deviceModel"] = global::Android.OS.Build.Model,
             ["gameVersion"] = prepared?.VersionName,
@@ -199,6 +203,11 @@ internal sealed class ProductLogService
     }
 
     private IReadOnlyList<DiagnosticTextSource> GetDiagnosticSources() =>
+        GetProductLogSources()
+            .Concat(GetProcessExitSources())
+            .ToArray();
+
+    private IEnumerable<DiagnosticTextSource> GetProductLogSources() =>
         new[]
         {
             GetSource(ProductLogKind.Launcher, ProductLogGeneration.Current),
@@ -212,8 +221,20 @@ internal sealed class ProductLogService
             .Select(static source => new DiagnosticTextSource(
                 source.EntryName,
                 source.Path,
-                MaximumDiagnosticBytes))
-            .ToArray();
+                MaximumDiagnosticBytes));
+
+    private IEnumerable<DiagnosticTextSource> GetProcessExitSources()
+    {
+        var root = AndroidPrivateStorage.GetProductLogsRoot(context);
+        yield return new DiagnosticTextSource(
+            "process-exits.txt",
+            Path.Combine(root, AndroidProcessExitDiagnostics.ReportFileName),
+            MaximumDiagnosticBytes);
+        yield return new DiagnosticTextSource(
+            "process-exit-traces.txt",
+            Path.Combine(root, AndroidProcessExitDiagnostics.TraceFileName),
+            MaximumDiagnosticBytes);
+    }
 
     private static long GetLength(string path)
     {

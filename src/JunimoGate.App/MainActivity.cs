@@ -49,6 +49,7 @@ public sealed class MainActivity : AppCompatActivity, ILauncherUiHost
         CanLaunch: false);
     private bool returningFromGame;
     private bool destroyed;
+    private long lastReportedGameExitTimestamp;
 
     LauncherState ILauncherUiHost.CurrentState => currentState;
 
@@ -99,6 +100,7 @@ public sealed class MainActivity : AppCompatActivity, ILauncherUiHost
         ShowOpenSourceNoticeIfNeeded();
 
         lifetimeCancellation = new CancellationTokenSource();
+        _ = CaptureProcessExitDiagnosticsAsync(lifetimeCancellation.Token);
         modManagement = new ModManagementUiSession(this, AndroidPrivateStorage.GetUserDataRoot(this));
         coordinator = new LauncherCoordinator(ApplicationContext ?? this);
         coordinator.StateChanged += OnLauncherStateChanged;
@@ -119,6 +121,7 @@ public sealed class MainActivity : AppCompatActivity, ILauncherUiHost
         if (returningFromGame && !destroyed && lifetimeCancellation is { IsCancellationRequested: false } cancellation)
         {
             returningFromGame = false;
+            _ = CaptureProcessExitDiagnosticsAsync(cancellation.Token);
             _ = InitializeAsync(cancellation.Token);
         }
     }
@@ -337,6 +340,38 @@ public sealed class MainActivity : AppCompatActivity, ILauncherUiHost
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             Log.Warn("JunimoGate.Mods", "ui-library-preload-failed", exception);
+        }
+    }
+
+    private async Task CaptureProcessExitDiagnosticsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await AndroidProcessExitDiagnostics.CaptureAsync(this, cancellationToken);
+            if (result.LatestGameExit is { } exit && TryMarkGameExitReported(exit.TimestampUtc))
+            {
+                Log.Info(
+                    "JunimoGate.ProcessExit",
+                    $"game-exit timestampUtc={exit.TimestampUtc:O} reason={exit.Reason} status={exit.Status} " +
+                    $"importance={exit.Importance} pssKb={exit.PssKilobytes} rssKb={exit.RssKilobytes} " +
+                    $"checkpoint={exit.LastCheckpoint ?? "none"}");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private bool TryMarkGameExitReported(DateTimeOffset timestamp)
+    {
+        var value = timestamp.ToUnixTimeMilliseconds();
+        while (true)
+        {
+            var previous = Interlocked.Read(ref lastReportedGameExitTimestamp);
+            if (value <= previous)
+                return false;
+            if (Interlocked.CompareExchange(ref lastReportedGameExitTimestamp, value, previous) == previous)
+                return true;
         }
     }
 
